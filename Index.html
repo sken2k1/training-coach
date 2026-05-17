@@ -1,0 +1,614 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+
+// ── ElevenLabs config ──────────────────────────────────────────
+const XI_VOICE_ID = "cgSgspJ2msm6clMCkdW9"; // Jessica
+const XI_API_KEY  = "sk_8e9a34f5493bce6d2f683afe1303cb8dc258834ed6ac9f3b";
+
+// ── Coaching scripts ───────────────────────────────────────────
+const CUES = {
+  welcome_c25k: "Hey! Welcome to your Couch to 5K workout. We're starting with a five minute warm up walk, and I'll guide you the whole way. You've got this. Let's go!",
+  welcome_hiit: "Hey! Welcome to your HIIT session. Five minutes to warm up, eight rounds of hard work, then cool down. Stay hydrated and let's get into it!",
+  warmup_1: "Alright, time to warm up. Nice brisk walk, get those legs moving.",
+  warmup_2: "Warm up time. Comfortable pace, get your muscles ready.",
+  walk_1: "Walk it out.", walk_2: "Recovery. Take it easy.",
+  walk_3: "Good work. Walk it off.", walk_4: "Rest interval. Nice and easy.", walk_5: "Walk break. Breathe.",
+  run_1: "Time to run! Find your pace and keep those feet moving.",
+  run_2: "Let's run! Nice and steady, you can do this.",
+  run_3: "Running time. Stay relaxed, breathe steady.",
+  run_4: "Pick it up! Any pace is a running pace, just keep moving.",
+  run_5: "Go! You're stronger than you think.",
+  hiit_1: "Go hard! Max effort, give it everything!",
+  hiit_2: "Work interval! Push it, you can rest in sixty seconds!",
+  hiit_3: "All out effort, make this one count!",
+  hiit_4: "Full effort! Sixty seconds, give it your best!",
+  hiit_5: "Go! You've done this before, you know you can do it!",
+  cool_1: "Amazing work. Easy walk now, let that heart rate come down.",
+  cool_2: "You did it! Cooldown time. Walk easy, breathe it out.",
+  cool_3: "Last stretch. Your body did something great today.",
+  enc_1: "Keep going, you're doing so well.",
+  enc_2: "Stay with it. Every second counts.",
+  enc_3: "Breathe. Relax your shoulders and keep moving.",
+  enc_4: "You're stronger than you feel right now.",
+  enc_5: "Don't give up. You'll feel amazing when it's done.",
+  enc_6: "Lock in. You can do anything for a little longer.",
+  halfway_1: "You're halfway there! You are absolutely doing this!",
+  halfway_2: "Half done! The hard part is behind you. Finish strong.",
+  halfway_3: "Halfway through! Look how far you've come.",
+  ten_sec: "Ten seconds.",
+  finish_1: "You did it! That workout is done and you crushed it. Be proud of yourself.",
+  finish_2: "Incredible! Workout complete. Every session makes you stronger. Rest up.",
+  finish_3: "That's a wrap! You finished. Your future self is going to thank you.",
+};
+const GROUPS = {
+  warmup:   ["warmup_1","warmup_2"],
+  walk:     ["walk_1","walk_2","walk_3","walk_4","walk_5"],
+  run:      ["run_1","run_2","run_3","run_4","run_5"],
+  hiit:     ["hiit_1","hiit_2","hiit_3","hiit_4","hiit_5"],
+  cool:     ["cool_1","cool_2","cool_3"],
+  encourage:["enc_1","enc_2","enc_3","enc_4","enc_5","enc_6"],
+  halfway:  ["halfway_1","halfway_2","halfway_3"],
+  finish:   ["finish_1","finish_2","finish_3"],
+};
+const pick = g => GROUPS[g][Math.floor(Math.random()*GROUPS[g].length)];
+
+// ── C25K data ──────────────────────────────────────────────────
+const C25K = [
+  { week:1, desc:"Walk 90s · Run 60s × 8", intervals: Array(8).fill(null).flatMap(()=>[{phase:"run",duration:60,label:"Run"},{phase:"walk",duration:90,label:"Walk"}]) },
+  { week:2, desc:"Walk 90s · Run 90s × 6", intervals: Array(6).fill(null).flatMap(()=>[{phase:"run",duration:90,label:"Run"},{phase:"walk",duration:90,label:"Walk"}]) },
+  { week:3, desc:"2 sets: Run 90s·Walk 90s·Run 3m·Walk 3m", intervals: Array(2).fill(null).flatMap(()=>[{phase:"run",duration:90,label:"Run"},{phase:"walk",duration:90,label:"Walk"},{phase:"run",duration:180,label:"Run"},{phase:"walk",duration:180,label:"Walk"}]) },
+  { week:4, desc:"Run 3m·Walk 90s·Run 5m·Walk 2.5m × 2", intervals: Array(2).fill(null).flatMap(()=>[{phase:"run",duration:180,label:"Run"},{phase:"walk",duration:90,label:"Walk"},{phase:"run",duration:300,label:"Run"},{phase:"walk",duration:150,label:"Walk"}]) },
+  { week:5, desc:"Run 5m × 3 with walk breaks", intervals:[{phase:"run",duration:300,label:"Run"},{phase:"walk",duration:180,label:"Walk"},{phase:"run",duration:300,label:"Run"},{phase:"walk",duration:180,label:"Walk"},{phase:"run",duration:300,label:"Run"}] },
+  { week:6, desc:"Run 5m·Walk 3m·Run 8m", intervals:[{phase:"run",duration:300,label:"Run"},{phase:"walk",duration:180,label:"Walk"},{phase:"run",duration:480,label:"Run"}] },
+  { week:7, desc:"Run 25 minutes", intervals:[{phase:"run",duration:1500,label:"Run 25 min"}] },
+  { week:8, desc:"Run 28 minutes", intervals:[{phase:"run",duration:1680,label:"Run 28 min"}] },
+  { week:9, desc:"Run 30 minutes 🎉", intervals:[{phase:"run",duration:1800,label:"Run 30 min"}] },
+];
+const buildHIIT = () => Array(8).fill(null).flatMap((_,i)=>[
+  {phase:"hiit",duration:60,label:`Work — Round ${i+1} of 8`},
+  {phase:"walk",duration:90,label:`Active Rest — Round ${i+1}`},
+]);
+const fmt = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+
+// ── Styles ─────────────────────────────────────────────────────
+const S = {
+  app:{fontFamily:"'DM Sans',sans-serif",background:"#0a0a0f",color:"#f0f0ff",minHeight:"100vh",overflowX:"hidden"},
+  screen:{display:"flex",flexDirection:"column",minHeight:"100vh"},
+  // home
+  homeHeader:{padding:"56px 28px 16px",background:"radial-gradient(ellipse at 30% 20%, #001a2e 0%, #0a0a0f 60%)"},
+  logo:{fontFamily:"'Bebas Neue',sans-serif",fontSize:52,letterSpacing:3,background:"linear-gradient(135deg,#00e5ff,#7b61ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"},
+  logoSub:{fontSize:11,letterSpacing:4,textTransform:"uppercase",color:"#6b6b8a",marginTop:4},
+  card:{background:"#1a1a26",border:"1px solid #2a2a3e",borderRadius:20,padding:24,cursor:"pointer",position:"relative",overflow:"hidden",marginBottom:16,WebkitUserSelect:"none"},
+  badge:{display:"inline-block",fontSize:10,fontWeight:700,letterSpacing:2,textTransform:"uppercase",padding:"4px 10px",borderRadius:20,marginBottom:12},
+  cardTitle:{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:2,marginBottom:6},
+  cardDesc:{fontSize:14,color:"#6b6b8a",lineHeight:1.5},
+  metaRow:{display:"flex",gap:16,marginTop:16},
+  metaItem:{fontSize:12,color:"#6b6b8a"},
+  metaVal:{color:"#f0f0ff",display:"block",fontSize:16,fontWeight:700},
+  // week list
+  screenHeader:{display:"flex",alignItems:"center",padding:"52px 20px 16px",gap:12,borderBottom:"1px solid #2a2a3e"},
+  backBtn:{width:40,height:40,background:"#1a1a26",border:"1px solid #2a2a3e",borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:20,flexShrink:0},
+  screenTitle:{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:2},
+  weekItem:{background:"#1a1a26",border:"1px solid #2a2a3e",borderRadius:16,padding:"18px 20px",marginBottom:12,cursor:"pointer",display:"flex",alignItems:"center",gap:16},
+  weekNum:{fontFamily:"'Bebas Neue',sans-serif",fontSize:36,color:"#00e5ff",minWidth:48,textAlign:"center"},
+  // workout
+  workoutHeader:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"52px 20px 12px"},
+  wLabel:{fontSize:11,letterSpacing:3,textTransform:"uppercase",color:"#6b6b8a"},
+  wTitle:{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:2},
+  // controls
+  controls:{display:"flex",gap:10,padding:"12px 20px 40px",marginTop:"auto"},
+  btnStop:{flex:"0.8",height:56,borderRadius:16,border:"1px solid rgba(255,61,113,0.3)",background:"rgba(255,61,113,0.12)",color:"#ff3d71",fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:2,cursor:"pointer"},
+  btnPause:{flex:2,height:56,borderRadius:16,border:"none",background:"linear-gradient(135deg,#00e5ff,#7b61ff)",color:"#000",fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:2,cursor:"pointer"},
+  btnSkip:{flex:"0.8",height:56,borderRadius:16,border:"1px solid rgba(123,97,255,0.35)",background:"rgba(123,97,255,0.12)",color:"#7b61ff",fontFamily:"'Bebas Neue',sans-serif",fontSize:14,letterSpacing:1,cursor:"pointer"},
+};
+
+const PHASE_COLORS = {run:"#00e5ff",walk:"#00e096",hiit:"#ff3d71",warmup:"#f5a623",cool:"#7b61ff"};
+const PHASE_BG     = {run:"rgba(0,229,255,0.12)",walk:"rgba(0,224,150,0.12)",hiit:"rgba(255,61,113,0.12)",warmup:"rgba(245,166,35,0.15)",cool:"rgba(123,97,255,0.12)"};
+
+export default function App() {
+  // ── screens: home | c25k | hiit | workout | done ──
+  const [screen, setScreen]       = useState("home");
+  const [weekList]                = useState(C25K);
+  const [plan, setPlan]           = useState([]);
+  const [meta, setMeta]           = useState({mode:"C25K",title:"Week 1"});
+
+  // workout state
+  const [idx, setIdx]             = useState(0);
+  const [secsLeft, setSecsLeft]   = useState(0);
+  const [phaseTotal, setPhaseTotal] = useState(0);
+  const [elapsed, setElapsed]     = useState(0);
+  const [paused, setPaused]       = useState(false);
+  const [done, setDone]           = useState(false);
+  const [completedCount, setCompletedCount] = useState(0);
+
+  // voice
+  const [voiceOn, setVoiceOn]     = useState(true);
+  const [loading, setLoading]     = useState(false);
+  const [loadPct, setLoadPct]     = useState(0);
+  const [loadMsg, setLoadMsg]     = useState("");
+
+  const timerRef      = useRef(null);
+  const cacheRef      = useRef({});
+  const halfwayRef    = useRef(false);
+  const encTimerRef   = useRef(null);
+  const audioRef      = useRef(null);
+  const planRef       = useRef([]);
+  const idxRef        = useRef(0);
+  const pausedRef     = useRef(false);
+  const secsRef       = useRef(0);
+  const phaseTotRef   = useRef(0);
+  const elapsedRef    = useRef(0);
+  const completedRef  = useRef(0);
+  const voiceRef      = useRef(true);
+
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
+  useEffect(() => { voiceRef.current = voiceOn; }, [voiceOn]);
+
+  // ── ElevenLabs fetch ──────────────────────────────────────────
+  const fetchCue = useCallback(async (key) => {
+    if (cacheRef.current[key]) return;
+    const text = CUES[key];
+    if (!text) return;
+    try {
+      const res = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + XI_VOICE_ID, {
+        method:"POST",
+        headers:{"xi-api-key": XI_API_KEY, "Content-Type":"application/json"},
+        body: JSON.stringify({
+          text,
+          model_id:"eleven_turbo_v2_5",
+          voice_settings:{stability:0.45,similarity_boost:0.82,style:0.35,use_speaker_boost:true}
+        })
+      });
+      if (!res.ok) { console.error("XI error", res.status, await res.text()); return; }
+      const blob = await res.blob();
+      const b64 = await new Promise((res,rej)=>{
+        const r = new FileReader();
+        r.onloadend = () => res(r.result);
+        r.onerror = rej;
+        r.readAsDataURL(blob);
+      });
+      cacheRef.current[key] = b64;
+    } catch(e) { console.error("fetchCue", key, e); }
+  }, []);
+
+  const preload = useCallback(async (mode) => {
+    setLoading(true); setLoadPct(0); setLoadMsg("Loading Jessica...");
+    const keys = Object.keys(CUES);
+    for (let i=0; i<keys.length; i++) {
+      await fetchCue(keys[i]);
+      setLoadPct(Math.round(((i+1)/keys.length)*100));
+    }
+    const n = Object.keys(cacheRef.current).length;
+    if (n === 0) setLoadMsg("⚠️ Voice failed — workout will run silently. Check your connection.");
+    else setLoadMsg(`✓ Jessica ready! (${n} clips)`);
+    setTimeout(() => setLoading(false), n===0 ? 2000 : 600);
+  }, [fetchCue]);
+
+  // ── Audio playback ────────────────────────────────────────────
+  const playKey = useCallback((key, delay=0) => {
+    if (!voiceRef.current) return;
+    const go = () => {
+      const url = cacheRef.current[key];
+      if (!url) return;
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src=""; }
+      const a = new Audio();
+      a.src = url;
+      a.volume = 1;
+      a.play().catch(e => console.error("play failed", key, e));
+      audioRef.current = a;
+    };
+    delay>0 ? setTimeout(go,delay) : go();
+  }, []);
+
+  const playGroup = useCallback((group, delay=0) => playKey(pick(group), delay), [playKey]);
+  const stopAudio = useCallback(() => { if(audioRef.current){audioRef.current.pause();audioRef.current=null;} },[]);
+
+  // ── Beep ──────────────────────────────────────────────────────
+  const beep = useCallback((freq, dur) => {
+    try {
+      const ctx = new (window.AudioContext||window.webkitAudioContext)();
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value=freq; o.type="sine";
+      g.gain.setValueAtTime(0.25, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+dur);
+      o.start(); o.stop(ctx.currentTime+dur);
+    } catch(e){}
+  }, []);
+
+  // ── Load interval ─────────────────────────────────────────────
+  const loadInterval = useCallback((i, p) => {
+    const seg = p[i];
+    secsRef.current = seg.duration;
+    phaseTotRef.current = seg.duration;
+    setSecsLeft(seg.duration);
+    setPhaseTotal(seg.duration);
+    setIdx(i);
+    idxRef.current = i;
+  }, []);
+
+  // ── Encouragement scheduler ───────────────────────────────────
+  const schedEnc = useCallback((phase, dur) => {
+    if (encTimerRef.current) clearTimeout(encTimerRef.current);
+    if (phase!=="run"&&phase!=="hiit") return;
+    if (dur<45) return;
+    encTimerRef.current = setTimeout(()=>{
+      if (!pausedRef.current) playGroup("encourage");
+    }, Math.floor(dur*0.4*1000));
+  },[playGroup]);
+
+  // ── Flash alert + voice ───────────────────────────────────────
+  const [alert, setAlert] = useState(null);
+  const flashAlert = useCallback((phase, label, dur) => {
+    const icons={warmup:"🚶",walk:"🚶",run:"🏃",hiit:"⚡",cool:"🧘"};
+    const msgs={warmup:"WARM UP",walk:"WALK",run:"RUN!",hiit:"GO HARD!",cool:"COOL DOWN"};
+    setAlert({emoji:icons[phase]||"💪", msg:msgs[phase]||label.toUpperCase(), dur:fmt(dur)});
+    setTimeout(()=>setAlert(null), 2500);
+    // voice
+    const g = ["warmup","walk","run","hiit","cool"].includes(phase)?phase:"walk";
+    playGroup(g, 300);
+    schedEnc(phase, dur);
+    if (navigator.vibrate) {
+      (phase==="run"||phase==="hiit") ? navigator.vibrate([200,100,200]) : navigator.vibrate(200);
+    }
+  }, [playGroup, schedEnc]);
+
+  // ── Core tick ─────────────────────────────────────────────────
+  const tick = useCallback(() => {
+    if (pausedRef.current) return;
+    secsRef.current--;
+    elapsedRef.current++;
+    setSecsLeft(secsRef.current);
+    setElapsed(elapsedRef.current);
+
+    if (secsRef.current<=3 && secsRef.current>0) beep(880,0.1);
+    if (secsRef.current===10 && phaseTotRef.current>20) playKey("ten_sec");
+
+    // halfway
+    const total = planRef.current.reduce((a,b)=>a+b.duration,0);
+    if (!halfwayRef.current && elapsedRef.current >= Math.floor(total/2)) {
+      halfwayRef.current = true;
+      playGroup("halfway");
+    }
+
+    if (secsRef.current<=0) {
+      completedRef.current++;
+      setCompletedCount(completedRef.current);
+      if (encTimerRef.current) clearTimeout(encTimerRef.current);
+      const next = idxRef.current+1;
+      if (next < planRef.current.length) {
+        loadInterval(next, planRef.current);
+        flashAlert(planRef.current[next].phase, planRef.current[next].label, planRef.current[next].duration);
+      } else {
+        // done
+        clearInterval(timerRef.current);
+        playGroup("finish", 800);
+        if (navigator.vibrate) navigator.vibrate([300,100,300,100,600]);
+        beep(523,0.3); setTimeout(()=>beep(659,0.3),300); setTimeout(()=>beep(784,0.5),600);
+        setDone(true);
+        setScreen("done");
+      }
+    }
+  }, [beep, playKey, playGroup, flashAlert, loadInterval]);
+
+  // ── Start countdown then workout ──────────────────────────────
+  const [countdown, setCountdown] = useState(null);
+  const startCountdown = useCallback((p, m) => {
+    halfwayRef.current = false;
+    let n = 3;
+    setCountdown(n);
+    beep(440,0.3);
+    // welcome
+    const wkey = m.mode==="HIIT 30" ? "welcome_hiit" : "welcome_c25k";
+    playKey(wkey, 500);
+    const id = setInterval(()=>{
+      n--;
+      if (n<=0) { clearInterval(id); setCountdown(null); startWorkoutTimer(); }
+      else { setCountdown(n); beep(440,0.2); }
+    },1000);
+  },[beep, playKey]);
+
+  const startWorkoutTimer = useCallback(()=>{
+    clearInterval(timerRef.current);
+    timerRef.current = setInterval(tick, 1000);
+  },[tick]);
+
+  // ── Begin workout ─────────────────────────────────────────────
+  const beginWorkout = useCallback(async (thePlan, theMeta) => {
+    clearInterval(timerRef.current);
+    planRef.current = thePlan;
+    idxRef.current = 0;
+    secsRef.current = thePlan[0].duration;
+    phaseTotRef.current = thePlan[0].duration;
+    elapsedRef.current = 0;
+    completedRef.current = 0;
+    halfwayRef.current = false;
+    pausedRef.current = false;
+
+    setPlan(thePlan);
+    setMeta(theMeta);
+    setIdx(0);
+    setSecsLeft(thePlan[0].duration);
+    setPhaseTotal(thePlan[0].duration);
+    setElapsed(0);
+    setPaused(false);
+    setDone(false);
+    setCompletedCount(0);
+    setAlert(null);
+
+    setScreen("workout");
+    await preload(theMeta.mode);
+    startCountdown(thePlan, theMeta);
+  }, [preload, startCountdown]);
+
+  const startC25K = useCallback(async (w) => {
+    const thePlan = [
+      {phase:"warmup",duration:300,label:"Warm-up Walk"},
+      ...w.intervals,
+      {phase:"cool",duration:300,label:"Cool-down Walk"}
+    ];
+    await beginWorkout(thePlan, {mode:"C25K",title:`Week ${w.week}`});
+  },[beginWorkout]);
+
+  const startHIIT = useCallback(async () => {
+    const thePlan = [
+      {phase:"warmup",duration:300,label:"Warm-up"},
+      ...buildHIIT(),
+      {phase:"cool",duration:300,label:"Cool-down"}
+    ];
+    await beginWorkout(thePlan, {mode:"HIIT 30",title:"HIIT Session"});
+  },[beginWorkout]);
+
+  const togglePause = useCallback(()=>{
+    const np = !pausedRef.current;
+    pausedRef.current = np;
+    setPaused(np);
+    if (!np) startWorkoutTimer();
+  },[startWorkoutTimer]);
+
+  const skipInterval = useCallback(()=>{
+    if (encTimerRef.current) clearTimeout(encTimerRef.current);
+    stopAudio();
+    const next = idxRef.current+1;
+    if (next>=planRef.current.length) { setDone(true); setScreen("done"); return; }
+    completedRef.current++;
+    setCompletedCount(completedRef.current);
+    loadInterval(next, planRef.current);
+    flashAlert(planRef.current[next].phase, planRef.current[next].label, planRef.current[next].duration);
+    if (pausedRef.current) { pausedRef.current=false; setPaused(false); }
+    startWorkoutTimer();
+  },[stopAudio,loadInterval,flashAlert,startWorkoutTimer]);
+
+  const stopWorkout = useCallback(()=>{
+    if (!window.confirm("Stop this workout?")) return;
+    clearInterval(timerRef.current);
+    if (encTimerRef.current) clearTimeout(encTimerRef.current);
+    stopAudio();
+    setScreen(meta.mode==="C25K"?"c25k":"hiit");
+  },[stopAudio,meta]);
+
+  useEffect(()=>()=>{ clearInterval(timerRef.current); if(encTimerRef.current) clearTimeout(encTimerRef.current); },[]);
+
+  // ── Derived ───────────────────────────────────────────────────
+  const seg      = plan[idx] || {phase:"warmup",duration:300,label:""};
+  const phasePct = phaseTotal>0 ? Math.round(((phaseTotal-secsLeft)/phaseTotal)*100) : 0;
+  const ringOff  = 553*(1-secsLeft/Math.max(phaseTotal,1));
+  const color    = PHASE_COLORS[seg.phase]||"#00e5ff";
+  const nextSeg  = plan[idx+1];
+
+  // ── RENDER ────────────────────────────────────────────────────
+  return (
+    <div style={S.app}>
+      <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet"/>
+
+      {/* ── HOME ── */}
+      {screen==="home" && (
+        <div style={S.screen}>
+          <div style={S.homeHeader}>
+            <div style={S.logo}>RUN COACH</div>
+            <div style={S.logoSub}>Your personal training app</div>
+          </div>
+          <div style={{flex:1,padding:"20px 28px 40px"}}>
+            <div onClick={()=>setScreen("c25k")} style={{...S.card,borderTop:"2px solid #00e5ff"}}>
+              <div style={{...S.badge,background:"rgba(0,229,255,0.15)",color:"#00e5ff"}}>PROGRAM</div>
+              <div style={S.cardTitle}>C25K</div>
+              <div style={S.cardDesc}>Couch to 5K — 9 weeks from walking to running 5km.</div>
+              <div style={S.metaRow}>
+                <div style={S.metaItem}><strong style={S.metaVal}>9</strong>Weeks</div>
+                <div style={S.metaItem}><strong style={S.metaVal}>3x</strong>Per week</div>
+                <div style={S.metaItem}><strong style={S.metaVal}>~30 min</strong>Sessions</div>
+              </div>
+            </div>
+            <div onClick={()=>setScreen("hiit")} style={{...S.card,borderTop:"2px solid #ff3d71"}}>
+              <div style={{...S.badge,background:"rgba(255,61,113,0.15)",color:"#ff3d71"}}>WORKOUT</div>
+              <div style={S.cardTitle}>HIIT 30</div>
+              <div style={S.cardDesc}>5-min warmup · 8 rounds · 5-min cooldown. Exactly 30 minutes.</div>
+              <div style={S.metaRow}>
+                <div style={S.metaItem}><strong style={S.metaVal}>30 min</strong>Total</div>
+                <div style={S.metaItem}><strong style={S.metaVal}>8</strong>Rounds</div>
+                <div style={S.metaItem}><strong style={S.metaVal}>60/90s</strong>Work/Rest</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── C25K WEEK SELECT ── */}
+      {screen==="c25k" && (
+        <div style={S.screen}>
+          <div style={S.screenHeader}>
+            <div style={S.backBtn} onClick={()=>setScreen("home")}>‹</div>
+            <div><div style={S.screenTitle}>C25K</div><div style={{fontSize:12,color:"#6b6b8a"}}>Choose your week</div></div>
+          </div>
+          <div style={{flex:1,overflowY:"auto",padding:"16px 20px 40px"}}>
+            {weekList.map(w=>(
+              <div key={w.week} style={S.weekItem} onClick={()=>startC25K(w)}>
+                <div style={S.weekNum}>{w.week}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:16,fontWeight:500,marginBottom:4}}>Week {w.week}</div>
+                  <div style={{fontSize:12,color:"#6b6b8a"}}>{w.desc}</div>
+                </div>
+                <div style={{color:"#6b6b8a",fontSize:20}}>›</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── HIIT INFO ── */}
+      {screen==="hiit" && (
+        <div style={S.screen}>
+          <div style={S.screenHeader}>
+            <div style={S.backBtn} onClick={()=>setScreen("home")}>‹</div>
+            <div><div style={S.screenTitle}>HIIT 30</div><div style={{fontSize:12,color:"#6b6b8a"}}>30-minute session</div></div>
+          </div>
+          <div style={{flex:1,overflowY:"auto",padding:20}}>
+            {[["🔥 Warm-up","5 min"],["⚡ 8 rounds of HIIT","20 min"],["  Work interval","60 sec"],["  Active rest","90 sec"],["❄️ Cool-down","5 min"],["Total","30 min"]].map(([a,b],i)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"12px 0",borderBottom:"1px solid #2a2a3e",fontSize:14}}>
+                <span style={{color: i===5?"#f0f0ff":"#6b6b8a",paddingLeft:i>1&&i<4?16:0}}>{a}</span>
+                <span style={{fontWeight:i===5?700:400,color:i===5?"#00e5ff":"#f0f0ff"}}>{b}</span>
+              </div>
+            ))}
+          </div>
+          <button onClick={startHIIT} style={{margin:"0 20px 40px",height:56,borderRadius:16,border:"none",background:"linear-gradient(135deg,#ff3d71,#f5a623)",color:"#000",fontFamily:"'Bebas Neue',sans-serif",fontSize:24,letterSpacing:3,cursor:"pointer"}}>
+            START HIIT
+          </button>
+        </div>
+      )}
+
+      {/* ── LOADING OVERLAY ── */}
+      {loading && (
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(10,10,15,0.97)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:200,textAlign:"center",padding:40}}>
+          <div style={{fontSize:48,marginBottom:20}}>🎙️</div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:3,marginBottom:8}}>LOADING JESSICA</div>
+          <div style={{fontSize:13,color:"#6b6b8a",marginBottom:24}}>Pre-loading your voice coach...</div>
+          <div style={{width:260,height:8,background:"#2a2a3e",borderRadius:4,overflow:"hidden",marginBottom:12}}>
+            <div style={{height:"100%",background:"linear-gradient(90deg,#00e5ff,#7b61ff)",borderRadius:4,width:loadPct+"%",transition:"width 0.3s"}}/>
+          </div>
+          <div style={{fontSize:13,color:loadPct===100?"#00e096":"#6b6b8a"}}>{loadMsg || loadPct+"%"}</div>
+        </div>
+      )}
+
+      {/* ── COUNTDOWN OVERLAY ── */}
+      {countdown!==null && (
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.88)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:150,textAlign:"center"}}>
+          <div style={{fontSize:64,marginBottom:16}}>🎯</div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:3,marginBottom:8}}>GET READY</div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:96,color:"#00e5ff",lineHeight:1}}>{countdown}</div>
+        </div>
+      )}
+
+      {/* ── PHASE ALERT ── */}
+      {alert && (
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.88)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:140,textAlign:"center",padding:40}}>
+          <div style={{fontSize:64,marginBottom:16}}>{alert.emoji}</div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:40,letterSpacing:3,marginBottom:8}}>{alert.msg}</div>
+          <div style={{fontSize:18,color:"#6b6b8a"}}>{alert.dur}</div>
+        </div>
+      )}
+
+      {/* ── WORKOUT ── */}
+      {screen==="workout" && !done && (
+        <div style={{...S.screen,position:"relative"}}>
+          {/* header */}
+          <div style={S.workoutHeader}>
+            <div>
+              <div style={S.wLabel}>{meta.mode}</div>
+              <div style={S.wTitle}>{meta.title}</div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <button onClick={()=>{setVoiceOn(v=>{const nv=!v;voiceRef.current=nv;if(!nv)stopAudio();return nv;})}} style={{background:"#1a1a26",border:"1px solid #2a2a3e",borderRadius:10,padding:"6px 12px",color:"#f0f0ff",fontSize:18,cursor:"pointer"}}>
+                {voiceOn?"🔊":"🔇"}
+              </button>
+              <div style={{textAlign:"right"}}>
+                <div style={S.wLabel}>Interval</div>
+                <div style={S.wTitle}>{idx+1} / {plan.length}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* phase banner */}
+          <div style={{margin:"0 20px",padding:"10px 16px",borderRadius:12,fontSize:12,fontWeight:700,letterSpacing:2,textTransform:"uppercase",textAlign:"center",background:PHASE_BG[seg.phase]||PHASE_BG.walk,color,border:`1px solid ${color}33`}}>
+            {seg.label.toUpperCase()}
+          </div>
+
+          {/* ring timer */}
+          <div style={{display:"flex",justifyContent:"center",alignItems:"center",padding:"20px 0 12px",position:"relative"}}>
+            <svg width={200} height={200} viewBox="0 0 200 200" style={{transform:"rotate(-90deg)"}}>
+              <circle cx={100} cy={100} r={88} fill="none" stroke="#2a2a3e" strokeWidth={8}/>
+              <circle cx={100} cy={100} r={88} fill="none" stroke={color} strokeWidth={8}
+                strokeLinecap="round" strokeDasharray={553} strokeDashoffset={ringOff}
+                style={{transition:"stroke-dashoffset 1s linear,stroke 0.4s"}}/>
+            </svg>
+            <div style={{position:"absolute",textAlign:"center"}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:68,letterSpacing:4,lineHeight:1}}>{fmt(secsLeft)}</div>
+              <div style={{fontSize:11,letterSpacing:3,textTransform:"uppercase",color:"#6b6b8a"}}>remaining</div>
+            </div>
+          </div>
+
+          {/* elapsed */}
+          <div style={{textAlign:"center",fontSize:13,color:"#6b6b8a",paddingBottom:4}}>
+            Total elapsed: <span style={{color:"#f0f0ff",fontWeight:500}}>{fmt(elapsed)}</span>
+          </div>
+
+          {/* progress bar */}
+          <div style={{padding:"0 20px",marginTop:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#6b6b8a",marginBottom:6}}>
+              <span>{seg.label}</span><span>{phasePct}%</span>
+            </div>
+            <div style={{height:6,background:"#2a2a3e",borderRadius:3,overflow:"hidden"}}>
+              <div style={{height:"100%",background:color,borderRadius:3,width:phasePct+"%",transition:"width 0.5s"}}/>
+            </div>
+          </div>
+
+          {/* next up */}
+          {nextSeg && (
+            <div style={{margin:"14px 20px",background:"#1a1a26",border:"1px solid #2a2a3e",borderRadius:14,padding:"12px 16px",display:"flex",alignItems:"center",gap:12}}>
+              <span style={{fontSize:20}}>⏭</span>
+              <div>
+                <div style={{fontSize:10,letterSpacing:2,textTransform:"uppercase",color:"#6b6b8a"}}>Next up</div>
+                <div style={{fontSize:15,fontWeight:500}}>{nextSeg.label} — {fmt(nextSeg.duration)}</div>
+              </div>
+            </div>
+          )}
+
+          {/* dots */}
+          <div style={{display:"flex",gap:6,justifyContent:"center",padding:"10px 20px",flexWrap:"wrap"}}>
+            {plan.slice(0,24).map((_,i)=>(
+              <div key={i} style={{width:10,height:10,borderRadius:"50%",background:i<idx?"#00e096":i===idx?color:"#2a2a3e",transform:i===idx?"scale(1.3)":"scale(1)",boxShadow:i===idx?`0 0 8px ${color}`:"none",transition:"all 0.3s",flexShrink:0}}/>
+            ))}
+          </div>
+
+          {/* controls */}
+          <div style={S.controls}>
+            <button style={S.btnStop} onClick={stopWorkout}>STOP</button>
+            <button style={S.btnPause} onClick={togglePause}>{paused?"RESUME":"PAUSE"}</button>
+            <button style={S.btnSkip} onClick={skipInterval}>SKIP ⏭</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── DONE ── */}
+      {screen==="done" && (
+        <div style={{...S.screen,alignItems:"center",justifyContent:"center",textAlign:"center",padding:40,background:"radial-gradient(ellipse at 50% 30%, #001f1a 0%, #0a0a0f 60%)"}}>
+          <div style={{fontSize:80,marginBottom:24,animation:"bounce 0.8s ease infinite alternate"}}>🏆</div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:48,color:"#00e096",letterSpacing:4}}>CRUSHED IT!</div>
+          <div style={{fontSize:16,color:"#6b6b8a",margin:"8px 0 32px"}}>You completed {meta.title}</div>
+          <div style={{display:"flex",gap:20,marginBottom:40}}>
+            <div style={{flex:1,background:"#1a1a26",border:"1px solid #2a2a3e",borderRadius:16,padding:16}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,color:"#00e5ff"}}>{fmt(elapsed)}</div>
+              <div style={{fontSize:11,letterSpacing:2,textTransform:"uppercase",color:"#6b6b8a",marginTop:4}}>Duration</div>
+            </div>
+            <div style={{flex:1,background:"#1a1a26",border:"1px solid #2a2a3e",borderRadius:16,padding:16}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,color:"#00e5ff"}}>{completedCount}</div>
+              <div style={{fontSize:11,letterSpacing:2,textTransform:"uppercase",color:"#6b6b8a",marginTop:4}}>Intervals</div>
+            </div>
+          </div>
+          <button onClick={()=>setScreen("home")} style={{width:"100%",height:56,borderRadius:16,border:"none",background:"linear-gradient(135deg,#00e096,#00a873)",color:"#000",fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:3,cursor:"pointer"}}>
+            HOME
+          </button>
+          <style>{`@keyframes bounce{from{transform:translateY(0)}to{transform:translateY(-12px)}}`}</style>
+        </div>
+      )}
+    </div>
+  );
+}
